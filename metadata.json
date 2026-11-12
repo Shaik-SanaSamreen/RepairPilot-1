@@ -1,0 +1,6 @@
+{
+  "name": "RepairPilot",
+  "description": "Mobile repair shop management app for tracking customers, devices, repair tickets, spare parts inventory, billing, and shop analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

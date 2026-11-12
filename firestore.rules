@@ -1,0 +1,767 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==================== GLOBAL HELPERS ====================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isNonEmptyStr(val, maxLen) {
+      return val is string && val.size() >= 1 && val.size() <= maxLen;
+    }
+
+    function isOptStr(data, field, maxLen) {
+      return !(field in data) || data[field] == null || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isBoundedStringList(val, maxLen) {
+      return val is list && val.size() <= maxLen && (val.size() == 0 || val[0] is string);
+    }
+
+    function isNonEmptyMembers(val) {
+      return val is list && val.size() >= 1 && val.size() <= 25 && (val[0] is string);
+    }
+
+    function isValidTimestamp(val) {
+      return val is timestamp && val <= request.time;
+    }
+
+    function isMoney(val) {
+      return val is number && val >= 0 && val <= 100000000;
+    }
+
+    function isRole(val) {
+      return val in ['OWNER', 'TECHNICIAN', 'RECEPTIONIST'];
+    }
+
+    function isRepairStatus(val) {
+      return val in [
+        'RECEIVED',
+        'DIAGNOSING',
+        'AWAITING_CUSTOMER_APPROVAL',
+        'APPROVED',
+        'IN_PROGRESS',
+        'WAITING_FOR_PARTS',
+        'REPAIR_COMPLETED',
+        'READY_FOR_PICKUP',
+        'DELIVERED',
+        'REJECTED',
+        'CANCELLED',
+        'UNABLE_TO_REPAIR'
+      ];
+    }
+
+    function isTerminalStatus(val) {
+      return val in ['DELIVERED', 'REJECTED', 'CANCELLED'];
+    }
+
+    function isShopMember(shopId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/shops/$(shopId)/members/$(request.auth.uid));
+    }
+
+    function memberRole(shopId) {
+      return get(/databases/$(database)/documents/shops/$(shopId)/members/$(request.auth.uid)).data.role;
+    }
+
+    function isShopOwner(shopId) {
+      return isShopMember(shopId) && memberRole(shopId) == 'OWNER';
+    }
+
+    function isShopStaff(shopId) {
+      return isShopMember(shopId) && memberRole(shopId) in ['OWNER', 'TECHNICIAN', 'RECEPTIONIST'];
+    }
+
+    function isShopFrontDeskOrOwner(shopId) {
+      return isShopMember(shopId) && memberRole(shopId) in ['OWNER', 'RECEPTIONIST'];
+    }
+
+    function isShopTechOrOwner(shopId) {
+      return isShopMember(shopId) && memberRole(shopId) in ['OWNER', 'TECHNICIAN'];
+    }
+
+    // ==================== ENTITY VALIDATION HELPERS ====================
+    function isValidUserAccount(data) {
+      return isNonEmptyStr(data.uid, 128) &&
+        isNonEmptyStr(data.displayName, 120) &&
+        isOptStr(data, 'email', 160) &&
+        isOptStr(data, 'activeShopId', 128) &&
+        (!( 'activeRole' in data ) || data.activeRole == null || isRole(data.activeRole)) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidShop(data) {
+      return isNonEmptyStr(data.ownerUid, 128) &&
+        isNonEmptyStr(data.shopName, 100) &&
+        isNonEmptyStr(data.shopCode, 16) &&
+        isOptStr(data, 'phone', 40) &&
+        isOptStr(data, 'address', 250) &&
+        isNonEmptyStr(data.currencySymbol, 8) &&
+        data.taxRatePercent is number && data.taxRatePercent >= 0 && data.taxRatePercent <= 50 &&
+        data.nextTicketSeq is int && data.nextTicketSeq >= 1 &&
+        data.nextInvoiceSeq is int && data.nextInvoiceSeq >= 1 &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidShopMember(data) {
+      return isNonEmptyStr(data.uid, 128) &&
+        isNonEmptyStr(data.shopId, 128) &&
+        isNonEmptyStr(data.displayName, 120) &&
+        isOptStr(data, 'email', 160) &&
+        isRole(data.role) &&
+        isOptStr(data, 'specialty', 100) &&
+        data.active is bool &&
+        isOptStr(data, 'inviteCode', 64) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidShopInvite(data) {
+      return isNonEmptyStr(data.shopId, 128) &&
+        isNonEmptyStr(data.shopName, 100) &&
+        isNonEmptyStr(data.ownerUid, 128) &&
+        isNonEmptyStr(data.staffName, 100) &&
+        isRole(data.role) &&
+        isOptStr(data, 'specialty', 100) &&
+        data.active is bool &&
+        isOptStr(data, 'usedByUid', 128) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCustomer(data) {
+      return isNonEmptyStr(data.name, 100) &&
+        isNonEmptyStr(data.mobile, 30) &&
+        isOptStr(data, 'email', 160) &&
+        isOptStr(data, 'address', 250) &&
+        data.active is bool &&
+        data.totalRepairs is int && data.totalRepairs >= 0 &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidDevice(data) {
+      return isNonEmptyStr(data.customerId, 128) &&
+        isNonEmptyStr(data.customerName, 100) &&
+        isNonEmptyStr(data.brand, 60) &&
+        isNonEmptyStr(data.model, 80) &&
+        isOptStr(data, 'imeiOrSerial', 60) &&
+        isNonEmptyStr(data.deviceType, 40) &&
+        isOptStr(data, 'color', 40) &&
+        isNonEmptyStr(data.condition, 120) &&
+        isOptStr(data, 'accessoriesReceived', 200) &&
+        isNonEmptyStr(data.reportedIssue, 500) &&
+        (!( 'photoUris' in data ) || data.photoUris == null || isBoundedStringList(data.photoUris, 10)) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidRepairTicket(data) {
+      return isNonEmptyStr(data.ticketNumber, 40) &&
+        isNonEmptyStr(data.customerId, 128) &&
+        isNonEmptyStr(data.customerName, 100) &&
+        isNonEmptyStr(data.customerMobile, 30) &&
+        isNonEmptyStr(data.deviceId, 128) &&
+        isNonEmptyStr(data.deviceSummary, 160) &&
+        isNonEmptyStr(data.problemDescription, 1000) &&
+        isOptStr(data, 'initialDiagnosis', 1000) &&
+        isMoney(data.estimatedCost) &&
+        isOptStr(data, 'estimatedCompletionDate', 40) &&
+        isOptStr(data, 'assignedTechUid', 128) &&
+        isOptStr(data, 'assignedTechName', 100) &&
+        data.priority in ['LOW', 'NORMAL', 'HIGH', 'URGENT'] &&
+        isRepairStatus(data.status) &&
+        isOptStr(data, 'intakeCondition', 300) &&
+        isOptStr(data, 'repairNotes', 1500) &&
+        isMoney(data.labourCharge) &&
+        isMoney(data.partsTotal) &&
+        isMoney(data.discountAmount) &&
+        data.taxRatePercent is number && data.taxRatePercent >= 0 && data.taxRatePercent <= 50 &&
+        isMoney(data.totalAmount) &&
+        isMoney(data.paidAmount) &&
+        isOptStr(data, 'invoiceId', 128) &&
+        (!( 'photoUris' in data ) || data.photoUris == null || isBoundedStringList(data.photoUris, 10)) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStatusHistory(data) {
+      return isNonEmptyStr(data.fromStatus, 40) &&
+        isRepairStatus(data.toStatus) &&
+        isOptStr(data, 'note', 500) &&
+        isNonEmptyStr(data.changedByUid, 128) &&
+        isNonEmptyStr(data.changedByName, 100) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidRepairNote(data) {
+      return isNonEmptyStr(data.content, 1000) &&
+        data.isDiagnosis is bool &&
+        isNonEmptyStr(data.authorUid, 128) &&
+        isNonEmptyStr(data.authorName, 100) &&
+        isRole(data.authorRole) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidRepairPart(data) {
+      return isNonEmptyStr(data.partId, 128) &&
+        isNonEmptyStr(data.partName, 120) &&
+        isOptStr(data, 'sku', 60) &&
+        data.quantity is int && data.quantity >= 1 && data.quantity <= 500 &&
+        isMoney(data.unitPrice) &&
+        isMoney(data.lineTotal) &&
+        isNonEmptyStr(data.addedByUid, 128) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidTechnician(data) {
+      return isOptStr(data, 'uid', 128) &&
+        isNonEmptyStr(data.name, 100) &&
+        isOptStr(data, 'phone', 30) &&
+        isNonEmptyStr(data.specialty, 100) &&
+        data.active is bool &&
+        data.assignedCount is int && data.assignedCount >= 0 &&
+        data.completedCount is int && data.completedCount >= 0 &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSparePart(data) {
+      return isNonEmptyStr(data.name, 120) &&
+        isNonEmptyStr(data.sku, 60) &&
+        isNonEmptyStr(data.category, 60) &&
+        data.stockQty is int && data.stockQty >= 0 &&
+        isMoney(data.purchasePrice) &&
+        isMoney(data.sellingPrice) &&
+        data.minStockLevel is int && data.minStockLevel >= 0 &&
+        isOptStr(data, 'supplierName', 100) &&
+        isOptStr(data, 'supplierContact', 80) &&
+        data.active is bool &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidInventoryTx(data) {
+      return isNonEmptyStr(data.partId, 128) &&
+        isNonEmptyStr(data.partName, 120) &&
+        data.txType in ['STOCK_IN', 'STOCK_OUT', 'REPAIR_CONSUME'] &&
+        data.quantityDelta is int &&
+        data.stockBefore is int && data.stockBefore >= 0 &&
+        data.stockAfter is int && data.stockAfter >= 0 &&
+        isMoney(data.unitCost) &&
+        isOptStr(data, 'referenceTicket', 40) &&
+        isOptStr(data, 'note', 300) &&
+        isNonEmptyStr(data.performedByUid, 128) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidInvoice(data) {
+      return isNonEmptyStr(data.invoiceNumber, 40) &&
+        isNonEmptyStr(data.repairId, 128) &&
+        isNonEmptyStr(data.ticketNumber, 40) &&
+        isNonEmptyStr(data.customerId, 128) &&
+        isNonEmptyStr(data.customerName, 100) &&
+        isOptStr(data, 'customerMobile', 30) &&
+        isNonEmptyStr(data.deviceSummary, 160) &&
+        isMoney(data.labourCharge) &&
+        isMoney(data.partsTotal) &&
+        isMoney(data.discountAmount) &&
+        data.taxRatePercent is number && data.taxRatePercent >= 0 && data.taxRatePercent <= 50 &&
+        isMoney(data.taxAmount) &&
+        isMoney(data.grandTotal) &&
+        isMoney(data.paidAmount) &&
+        isMoney(data.balanceDue) &&
+        data.paymentStatus in ['UNPAID', 'PARTIAL', 'PAID'] &&
+        isOptStr(data, 'lineItemsSummary', 2000) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPayment(data) {
+      return isNonEmptyStr(data.invoiceId, 128) &&
+        isNonEmptyStr(data.repairId, 128) &&
+        isNonEmptyStr(data.ticketNumber, 40) &&
+        isNonEmptyStr(data.customerName, 100) &&
+        data.amount is number && data.amount > 0 && data.amount <= 100000000 &&
+        data.method in ['CASH', 'UPI', 'BANK_TRANSFER', 'CARD'] &&
+        data.isAdvance is bool &&
+        isOptStr(data, 'referenceNumber', 100) &&
+        isNonEmptyStr(data.receivedByUid, 128) &&
+        isNonEmptyStr(data.receivedByName, 100) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidExpense(data) {
+      return isNonEmptyStr(data.title, 120) &&
+        isNonEmptyStr(data.category, 60) &&
+        data.amount is number && data.amount > 0 && data.amount <= 100000000 &&
+        isOptStr(data, 'note', 400) &&
+        isNonEmptyStr(data.recordedByUid, 128) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidNotification(data) {
+      return isNonEmptyStr(data.title, 120) &&
+        isNonEmptyStr(data.message, 400) &&
+        isNonEmptyStr(data.eventType, 60) &&
+        isOptStr(data, 'repairId', 128) &&
+        isOptStr(data, 'ticketNumber', 40) &&
+        data.isRead is bool &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAuditLog(data) {
+      return isNonEmptyStr(data.action, 80) &&
+        isNonEmptyStr(data.entityType, 60) &&
+        isNonEmptyStr(data.entityId, 128) &&
+        isNonEmptyStr(data.summary, 400) &&
+        isNonEmptyStr(data.actorUid, 128) &&
+        isNonEmptyStr(data.actorName, 100) &&
+        isRole(data.actorRole) &&
+        isNonEmptyMembers(data.memberUids) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidPublicTracking(data) {
+      return isNonEmptyStr(data.shopId, 128) &&
+        isNonEmptyStr(data.shopName, 100) &&
+        isNonEmptyStr(data.ticketNumber, 40) &&
+        isNonEmptyStr(data.deviceSummary, 160) &&
+        isRepairStatus(data.status) &&
+        isOptStr(data, 'estimatedCompletionDate', 40) &&
+        data.paymentStatus in ['UNPAID', 'PARTIAL', 'PAID'] &&
+        isMoney(data.totalAmount) &&
+        isMoney(data.paidAmount) &&
+        isMoney(data.balanceDue) &&
+        (!( 'timelineSummary' in data ) || data.timelineSummary == null || isBoundedStringList(data.timelineSummary, 25)) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    // ==================== COLLECTION RULES ====================
+
+    match /users/{userId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        incoming().uid == request.auth.uid &&
+        incoming().keys().hasAll(['uid', 'displayName', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['uid', 'displayName', 'email', 'activeShopId', 'activeRole', 'createdAt', 'updatedAt']) &&
+        isValidUserAccount(incoming());
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        isValidUserAccount(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'activeShopId', 'activeRole', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shopInvites/{inviteCode} {
+      allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(inviteCode);
+      allow create: if isSignedIn() &&
+        isValidId(inviteCode) &&
+        isValidShopInvite(incoming()) &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().keys().hasAll(['shopId', 'shopName', 'ownerUid', 'staffName', 'role', 'active', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['shopId', 'shopName', 'ownerUid', 'staffName', 'role', 'specialty', 'active', 'usedByUid', 'createdAt', 'updatedAt']) &&
+        isShopOwner(incoming().shopId);
+      allow update: if isSignedIn() &&
+        isValidId(inviteCode) &&
+        isValidShopInvite(incoming()) &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().shopId == existing().shopId &&
+        incoming().role == existing().role &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isShopOwner(existing().shopId) ||
+          (existing().active == true &&
+           incoming().active == false &&
+           incoming().usedByUid == request.auth.uid &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['active', 'usedByUid', 'updatedAt']))
+        );
+      allow delete: if isSignedIn() && isValidId(inviteCode) && isShopOwner(existing().shopId);
+    }
+
+    match /publicTracking/{trackingKey} {
+      allow list: if false;
+      allow get: if isSignedIn() && isValidId(trackingKey);
+      allow create: if isSignedIn() &&
+        isValidId(trackingKey) &&
+        isValidPublicTracking(incoming()) &&
+        incoming().keys().hasAll(['shopId', 'shopName', 'ticketNumber', 'deviceSummary', 'status', 'paymentStatus', 'totalAmount', 'paidAmount', 'balanceDue', 'updatedAt']) &&
+        incoming().keys().hasOnly(['shopId', 'shopName', 'ticketNumber', 'deviceSummary', 'status', 'estimatedCompletionDate', 'paymentStatus', 'totalAmount', 'paidAmount', 'balanceDue', 'timelineSummary', 'updatedAt']) &&
+        isShopStaff(incoming().shopId);
+      allow update: if isSignedIn() &&
+        isValidId(trackingKey) &&
+        isValidPublicTracking(incoming()) &&
+        incoming().shopId == existing().shopId &&
+        isShopStaff(existing().shopId);
+      allow delete: if isSignedIn() && isValidId(trackingKey) && isShopOwner(existing().shopId);
+    }
+
+    match /shops/{shopId} {
+      allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+      allow get: if isSignedIn() && isValidId(shopId) &&
+        ((request.auth.uid in existing().memberUids) || isShopMember(shopId));
+      allow create: if isSignedIn() &&
+        isValidId(shopId) &&
+        isValidShop(incoming()) &&
+        incoming().ownerUid == request.auth.uid &&
+        (request.auth.uid in incoming().memberUids) &&
+        incoming().keys().hasAll(['ownerUid', 'shopName', 'shopCode', 'currencySymbol', 'taxRatePercent', 'nextTicketSeq', 'nextInvoiceSeq', 'memberUids', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['ownerUid', 'shopName', 'shopCode', 'phone', 'address', 'currencySymbol', 'taxRatePercent', 'nextTicketSeq', 'nextInvoiceSeq', 'memberUids', 'createdAt', 'updatedAt']);
+      allow update: if isSignedIn() &&
+        isValidId(shopId) &&
+        isValidShop(incoming()) &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (isShopOwner(shopId) && incoming().diff(existing()).affectedKeys().hasOnly(['shopName', 'shopCode', 'phone', 'address', 'currencySymbol', 'taxRatePercent', 'nextTicketSeq', 'nextInvoiceSeq', 'memberUids', 'updatedAt'])) ||
+          (isShopStaff(shopId) && incoming().diff(existing()).affectedKeys().hasOnly(['nextTicketSeq', 'nextInvoiceSeq', 'updatedAt'])) ||
+          (request.auth.uid in incoming().memberUids && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt']))
+        );
+      allow delete: if false;
+
+      match /members/{memberUid} {
+        allow list: if isSignedIn() && (request.auth.uid == existing().uid || (request.auth.uid in existing().memberUids));
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(memberUid) &&
+          (request.auth.uid == memberUid || isShopMember(shopId));
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(memberUid) &&
+          isValidShopMember(incoming()) &&
+          incoming().uid == memberUid &&
+          incoming().shopId == shopId &&
+          incoming().keys().hasAll(['uid', 'shopId', 'displayName', 'role', 'active', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['uid', 'shopId', 'displayName', 'email', 'role', 'specialty', 'active', 'inviteCode', 'memberUids', 'createdAt', 'updatedAt']) &&
+          (
+            (request.auth.uid == memberUid &&
+             incoming().role == 'OWNER' &&
+             get(/databases/$(database)/documents/shops/$(shopId)).data.ownerUid == request.auth.uid) ||
+            isShopOwner(shopId) ||
+            (request.auth.uid == memberUid &&
+             ('inviteCode' in incoming()) &&
+             incoming().inviteCode is string &&
+             isValidId(incoming().inviteCode) &&
+             exists(/databases/$(database)/documents/shopInvites/$(incoming().inviteCode)) &&
+             get(/databases/$(database)/documents/shopInvites/$(incoming().inviteCode)).data.active == true &&
+             get(/databases/$(database)/documents/shopInvites/$(incoming().inviteCode)).data.shopId == shopId &&
+             get(/databases/$(database)/documents/shopInvites/$(incoming().inviteCode)).data.role == incoming().role)
+          );
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(memberUid) &&
+          isValidShopMember(incoming()) &&
+          incoming().uid == existing().uid &&
+          incoming().shopId == existing().shopId &&
+          incoming().createdAt == existing().createdAt &&
+          isShopOwner(shopId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'role', 'specialty', 'active', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(memberUid) &&
+          isShopOwner(shopId) && memberUid != request.auth.uid;
+      }
+
+      match /customers/{customerId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(customerId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(customerId) &&
+          isValidCustomer(incoming()) &&
+          incoming().keys().hasAll(['name', 'mobile', 'active', 'totalRepairs', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['name', 'mobile', 'email', 'address', 'active', 'totalRepairs', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopFrontDeskOrOwner(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(customerId) &&
+          isValidCustomer(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          isShopFrontDeskOrOwner(shopId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'mobile', 'email', 'address', 'active', 'totalRepairs', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(customerId) && isShopOwner(shopId);
+      }
+
+      match /devices/{deviceId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(deviceId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(deviceId) &&
+          isValidDevice(incoming()) &&
+          incoming().keys().hasAll(['customerId', 'customerName', 'brand', 'model', 'deviceType', 'condition', 'reportedIssue', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['customerId', 'customerName', 'brand', 'model', 'imeiOrSerial', 'deviceType', 'color', 'condition', 'accessoriesReceived', 'reportedIssue', 'photoUris', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopFrontDeskOrOwner(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(deviceId) &&
+          isValidDevice(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().customerId == existing().customerId &&
+          isShopStaff(shopId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['customerName', 'brand', 'model', 'imeiOrSerial', 'deviceType', 'color', 'condition', 'accessoriesReceived', 'reportedIssue', 'photoUris', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(deviceId) && isShopOwner(shopId);
+      }
+
+      match /repairs/{repairId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(repairId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(repairId) &&
+          isValidRepairTicket(incoming()) &&
+          incoming().keys().hasAll(['ticketNumber', 'customerId', 'customerName', 'customerMobile', 'deviceId', 'deviceSummary', 'problemDescription', 'estimatedCost', 'priority', 'status', 'labourCharge', 'partsTotal', 'discountAmount', 'taxRatePercent', 'totalAmount', 'paidAmount', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['ticketNumber', 'customerId', 'customerName', 'customerMobile', 'deviceId', 'deviceSummary', 'problemDescription', 'initialDiagnosis', 'estimatedCost', 'estimatedCompletionDate', 'assignedTechUid', 'assignedTechName', 'priority', 'status', 'intakeCondition', 'repairNotes', 'labourCharge', 'partsTotal', 'discountAmount', 'taxRatePercent', 'totalAmount', 'paidAmount', 'invoiceId', 'photoUris', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopFrontDeskOrOwner(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(repairId) &&
+          isValidRepairTicket(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().ticketNumber == existing().ticketNumber &&
+          incoming().customerId == existing().customerId &&
+          incoming().deviceId == existing().deviceId &&
+          (
+            isShopOwner(shopId) ||
+            (!isTerminalStatus(existing().status) && isShopFrontDeskOrOwner(shopId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['problemDescription', 'initialDiagnosis', 'estimatedCost', 'estimatedCompletionDate', 'assignedTechUid', 'assignedTechName', 'priority', 'status', 'intakeCondition', 'repairNotes', 'labourCharge', 'partsTotal', 'discountAmount', 'taxRatePercent', 'totalAmount', 'paidAmount', 'invoiceId', 'photoUris', 'memberUids', 'updatedAt'])) ||
+            (!isTerminalStatus(existing().status) && isShopTechOrOwner(shopId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'initialDiagnosis', 'repairNotes', 'partsTotal', 'totalAmount', 'photoUris', 'updatedAt']))
+          );
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(repairId) && isShopOwner(shopId);
+
+        match /statusHistory/{historyId} {
+          allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+          allow get: if isSignedIn() && isValidId(shopId) && isValidId(repairId) && isValidId(historyId) && isShopMember(shopId);
+          allow create: if isSignedIn() &&
+            isValidId(shopId) &&
+            isValidId(repairId) &&
+            isValidId(historyId) &&
+            isValidStatusHistory(incoming()) &&
+            incoming().changedByUid == request.auth.uid &&
+            incoming().keys().hasAll(['fromStatus', 'toStatus', 'changedByUid', 'changedByName', 'memberUids', 'createdAt']) &&
+            incoming().keys().hasOnly(['fromStatus', 'toStatus', 'note', 'changedByUid', 'changedByName', 'memberUids', 'createdAt']) &&
+            isShopStaff(shopId);
+          allow update, delete: if false;
+        }
+
+        match /notes/{noteId} {
+          allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+          allow get: if isSignedIn() && isValidId(shopId) && isValidId(repairId) && isValidId(noteId) && isShopMember(shopId);
+          allow create: if isSignedIn() &&
+            isValidId(shopId) &&
+            isValidId(repairId) &&
+            isValidId(noteId) &&
+            isValidRepairNote(incoming()) &&
+            incoming().authorUid == request.auth.uid &&
+            incoming().keys().hasAll(['content', 'isDiagnosis', 'authorUid', 'authorName', 'authorRole', 'memberUids', 'createdAt']) &&
+            incoming().keys().hasOnly(['content', 'isDiagnosis', 'authorUid', 'authorName', 'authorRole', 'memberUids', 'createdAt']) &&
+            isShopStaff(shopId);
+          allow update, delete: if false;
+        }
+
+        match /partsUsed/{usageId} {
+          allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+          allow get: if isSignedIn() && isValidId(shopId) && isValidId(repairId) && isValidId(usageId) && isShopMember(shopId);
+          allow create: if isSignedIn() &&
+            isValidId(shopId) &&
+            isValidId(repairId) &&
+            isValidId(usageId) &&
+            isValidRepairPart(incoming()) &&
+            incoming().addedByUid == request.auth.uid &&
+            incoming().keys().hasAll(['partId', 'partName', 'quantity', 'unitPrice', 'lineTotal', 'addedByUid', 'memberUids', 'createdAt']) &&
+            incoming().keys().hasOnly(['partId', 'partName', 'sku', 'quantity', 'unitPrice', 'lineTotal', 'addedByUid', 'memberUids', 'createdAt']) &&
+            isShopTechOrOwner(shopId);
+          allow update, delete: if false;
+        }
+      }
+
+      match /technicians/{techId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(techId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(techId) &&
+          isValidTechnician(incoming()) &&
+          incoming().keys().hasAll(['name', 'specialty', 'active', 'assignedCount', 'completedCount', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['uid', 'name', 'phone', 'specialty', 'active', 'assignedCount', 'completedCount', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopOwner(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(techId) &&
+          isValidTechnician(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isShopOwner(shopId) ||
+            (isShopStaff(shopId) && incoming().diff(existing()).affectedKeys().hasOnly(['assignedCount', 'completedCount', 'updatedAt']))
+          );
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(techId) && isShopOwner(shopId);
+      }
+
+      match /parts/{partId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(partId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(partId) &&
+          isValidSparePart(incoming()) &&
+          incoming().keys().hasAll(['name', 'sku', 'category', 'stockQty', 'purchasePrice', 'sellingPrice', 'minStockLevel', 'active', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['name', 'sku', 'category', 'stockQty', 'purchasePrice', 'sellingPrice', 'minStockLevel', 'supplierName', 'supplierContact', 'active', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopOwner(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(partId) &&
+          isValidSparePart(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isShopOwner(shopId) ||
+            (isShopTechOrOwner(shopId) && incoming().diff(existing()).affectedKeys().hasOnly(['stockQty', 'updatedAt']))
+          );
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(partId) && isShopOwner(shopId);
+      }
+
+      match /inventoryTransactions/{txId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(txId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(txId) &&
+          isValidInventoryTx(incoming()) &&
+          incoming().performedByUid == request.auth.uid &&
+          incoming().keys().hasAll(['partId', 'partName', 'txType', 'quantityDelta', 'stockBefore', 'stockAfter', 'unitCost', 'performedByUid', 'memberUids', 'createdAt']) &&
+          incoming().keys().hasOnly(['partId', 'partName', 'txType', 'quantityDelta', 'stockBefore', 'stockAfter', 'unitCost', 'referenceTicket', 'note', 'performedByUid', 'memberUids', 'createdAt']) &&
+          isShopTechOrOwner(shopId);
+        allow update, delete: if false;
+      }
+
+      match /invoices/{invoiceId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(invoiceId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(invoiceId) &&
+          isValidInvoice(incoming()) &&
+          incoming().keys().hasAll(['invoiceNumber', 'repairId', 'ticketNumber', 'customerId', 'customerName', 'deviceSummary', 'labourCharge', 'partsTotal', 'discountAmount', 'taxRatePercent', 'taxAmount', 'grandTotal', 'paidAmount', 'balanceDue', 'paymentStatus', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['invoiceNumber', 'repairId', 'ticketNumber', 'customerId', 'customerName', 'customerMobile', 'deviceSummary', 'labourCharge', 'partsTotal', 'discountAmount', 'taxRatePercent', 'taxAmount', 'grandTotal', 'paidAmount', 'balanceDue', 'paymentStatus', 'lineItemsSummary', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopFrontDeskOrOwner(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(invoiceId) &&
+          isValidInvoice(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().invoiceNumber == existing().invoiceNumber &&
+          incoming().repairId == existing().repairId &&
+          isShopFrontDeskOrOwner(shopId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['labourCharge', 'partsTotal', 'discountAmount', 'taxRatePercent', 'taxAmount', 'grandTotal', 'paidAmount', 'balanceDue', 'paymentStatus', 'lineItemsSummary', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(invoiceId) && isShopOwner(shopId);
+      }
+
+      match /payments/{paymentId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(paymentId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(paymentId) &&
+          isValidPayment(incoming()) &&
+          incoming().receivedByUid == request.auth.uid &&
+          incoming().keys().hasAll(['invoiceId', 'repairId', 'ticketNumber', 'customerName', 'amount', 'method', 'isAdvance', 'receivedByUid', 'receivedByName', 'memberUids', 'createdAt']) &&
+          incoming().keys().hasOnly(['invoiceId', 'repairId', 'ticketNumber', 'customerName', 'amount', 'method', 'isAdvance', 'referenceNumber', 'receivedByUid', 'receivedByName', 'memberUids', 'createdAt']) &&
+          isShopFrontDeskOrOwner(shopId);
+        allow update, delete: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(expenseId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(expenseId) &&
+          isValidExpense(incoming()) &&
+          incoming().recordedByUid == request.auth.uid &&
+          incoming().keys().hasAll(['title', 'category', 'amount', 'recordedByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['title', 'category', 'amount', 'note', 'recordedByUid', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopOwner(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(expenseId) &&
+          isValidExpense(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          isShopOwner(shopId);
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(expenseId) && isShopOwner(shopId);
+      }
+
+      match /notifications/{notificationId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(notificationId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(notificationId) &&
+          isValidNotification(incoming()) &&
+          incoming().keys().hasAll(['title', 'message', 'eventType', 'isRead', 'memberUids', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['title', 'message', 'eventType', 'repairId', 'ticketNumber', 'isRead', 'memberUids', 'createdAt', 'updatedAt']) &&
+          isShopStaff(shopId);
+        allow update: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(notificationId) &&
+          isValidNotification(incoming()) &&
+          incoming().createdAt == existing().createdAt &&
+          isShopStaff(shopId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'memberUids', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(shopId) && isValidId(notificationId) && isShopOwner(shopId);
+      }
+
+      match /auditLogs/{logId} {
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberUids);
+        allow get: if isSignedIn() && isValidId(shopId) && isValidId(logId) && isShopMember(shopId);
+        allow create: if isSignedIn() &&
+          isValidId(shopId) &&
+          isValidId(logId) &&
+          isValidAuditLog(incoming()) &&
+          incoming().actorUid == request.auth.uid &&
+          incoming().keys().hasAll(['action', 'entityType', 'entityId', 'summary', 'actorUid', 'actorName', 'actorRole', 'memberUids', 'createdAt']) &&
+          incoming().keys().hasOnly(['action', 'entityType', 'entityId', 'summary', 'actorUid', 'actorName', 'actorRole', 'memberUids', 'createdAt']) &&
+          isShopStaff(shopId);
+        allow update, delete: if false;
+      }
+    }
+  }
+}

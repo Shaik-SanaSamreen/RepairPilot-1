@@ -1,0 +1,468 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated user profile linking a Google account to an active shop and role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "displayName": { "type": "string", "description": "User full name" },
+        "email": { "type": "string", "description": "Google account email" },
+        "activeShopId": { "type": "string", "description": "Currently selected shop document ID" },
+        "activeRole": { "type": "string", "enum": ["OWNER", "TECHNICIAN", "RECEPTIONIST"], "description": "Role label for UI display" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": ["uid", "displayName", "createdAt", "updatedAt"]
+    },
+    "Shop": {
+      "title": "Shop",
+      "description": "Repair shop tenant workspace with configuration and sequence counters.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "description": "Shop owner UID" },
+        "shopName": { "type": "string", "description": "Business display name" },
+        "shopCode": { "type": "string", "description": "Short uppercase shop prefix" },
+        "phone": { "type": "string", "description": "Shop contact phone" },
+        "address": { "type": "string", "description": "Shop street address" },
+        "currencySymbol": { "type": "string", "description": "Currency symbol e.g. $ or ₹" },
+        "taxRatePercent": { "type": "number", "description": "Default tax percentage" },
+        "nextTicketSeq": { "type": "integer", "description": "Sequential ticket counter" },
+        "nextInvoiceSeq": { "type": "integer", "description": "Sequential invoice counter" },
+        "memberUids": { "type": "array", "description": "Authorized staff UIDs for tenant-isolated queries" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "shopName", "shopCode", "currencySymbol", "taxRatePercent", "nextTicketSeq", "nextInvoiceSeq", "memberUids", "createdAt", "updatedAt"]
+    },
+    "ShopMember": {
+      "title": "ShopMember",
+      "description": "Authoritative role membership document inside a shop.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "shopId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "TECHNICIAN", "RECEPTIONIST"] },
+        "specialty": { "type": "string" },
+        "active": { "type": "boolean" },
+        "inviteCode": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "shopId", "displayName", "role", "active", "memberUids", "createdAt", "updatedAt"]
+    },
+    "ShopInvite": {
+      "title": "ShopInvite",
+      "description": "Single-use invite code allowing staff to join a shop with a pre-assigned role.",
+      "type": "object",
+      "properties": {
+        "shopId": { "type": "string" },
+        "shopName": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "staffName": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "TECHNICIAN", "RECEPTIONIST"] },
+        "specialty": { "type": "string" },
+        "active": { "type": "boolean" },
+        "usedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["shopId", "shopName", "ownerUid", "staffName", "role", "active", "createdAt", "updatedAt"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Repair shop customer contact record.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "mobile": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "active": { "type": "boolean" },
+        "totalRepairs": { "type": "integer" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "mobile", "active", "totalRepairs", "memberUids", "createdAt", "updatedAt"]
+    },
+    "Device": {
+      "title": "Device",
+      "description": "Mobile device registered to a customer.",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "brand": { "type": "string" },
+        "model": { "type": "string" },
+        "imeiOrSerial": { "type": "string" },
+        "deviceType": { "type": "string" },
+        "color": { "type": "string" },
+        "condition": { "type": "string" },
+        "accessoriesReceived": { "type": "string" },
+        "reportedIssue": { "type": "string" },
+        "photoUris": { "type": "array" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerId", "customerName", "brand", "model", "deviceType", "condition", "reportedIssue", "memberUids", "createdAt", "updatedAt"]
+    },
+    "RepairTicket": {
+      "title": "RepairTicket",
+      "description": "Core repair job ticket with status workflow, technician assignment, and billing totals.",
+      "type": "object",
+      "properties": {
+        "ticketNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerMobile": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "deviceSummary": { "type": "string" },
+        "problemDescription": { "type": "string" },
+        "initialDiagnosis": { "type": "string" },
+        "estimatedCost": { "type": "number" },
+        "estimatedCompletionDate": { "type": "string" },
+        "assignedTechUid": { "type": "string" },
+        "assignedTechName": { "type": "string" },
+        "priority": { "type": "string", "enum": ["LOW", "NORMAL", "HIGH", "URGENT"] },
+        "status": {
+          "type": "string",
+          "enum": [
+            "RECEIVED",
+            "DIAGNOSING",
+            "AWAITING_CUSTOMER_APPROVAL",
+            "APPROVED",
+            "IN_PROGRESS",
+            "WAITING_FOR_PARTS",
+            "REPAIR_COMPLETED",
+            "READY_FOR_PICKUP",
+            "DELIVERED",
+            "REJECTED",
+            "CANCELLED",
+            "UNABLE_TO_REPAIR"
+          ]
+        },
+        "intakeCondition": { "type": "string" },
+        "repairNotes": { "type": "string" },
+        "labourCharge": { "type": "number" },
+        "partsTotal": { "type": "number" },
+        "discountAmount": { "type": "number" },
+        "taxRatePercent": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "invoiceId": { "type": "string" },
+        "photoUris": { "type": "array" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ticketNumber", "customerId", "customerName", "customerMobile", "deviceId", "deviceSummary", "problemDescription", "estimatedCost", "priority", "status", "labourCharge", "partsTotal", "discountAmount", "taxRatePercent", "totalAmount", "paidAmount", "memberUids", "createdAt", "updatedAt"]
+    },
+    "RepairStatusHistory": {
+      "title": "RepairStatusHistory",
+      "description": "Append-only status change event on a repair ticket.",
+      "type": "object",
+      "properties": {
+        "fromStatus": { "type": "string" },
+        "toStatus": { "type": "string" },
+        "note": { "type": "string" },
+        "changedByUid": { "type": "string" },
+        "changedByName": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fromStatus", "toStatus", "changedByUid", "changedByName", "memberUids", "createdAt"]
+    },
+    "RepairNote": {
+      "title": "RepairNote",
+      "description": "Append-only diagnosis or technician repair note.",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string" },
+        "isDiagnosis": { "type": "boolean" },
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorRole": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["content", "isDiagnosis", "authorUid", "authorName", "authorRole", "memberUids", "createdAt"]
+    },
+    "RepairPartUsage": {
+      "title": "RepairPartUsage",
+      "description": "Append-only spare part consumption record on a repair ticket.",
+      "type": "object",
+      "properties": {
+        "partId": { "type": "string" },
+        "partName": { "type": "string" },
+        "sku": { "type": "string" },
+        "quantity": { "type": "integer" },
+        "unitPrice": { "type": "number" },
+        "lineTotal": { "type": "number" },
+        "addedByUid": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["partId", "partName", "quantity", "unitPrice", "lineTotal", "addedByUid", "memberUids", "createdAt"]
+    },
+    "TechnicianProfile": {
+      "title": "TechnicianProfile",
+      "description": "Technician directory and workload tracking.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "specialty": { "type": "string" },
+        "active": { "type": "boolean" },
+        "assignedCount": { "type": "integer" },
+        "completedCount": { "type": "integer" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "specialty", "active", "assignedCount", "completedCount", "memberUids", "createdAt", "updatedAt"]
+    },
+    "SparePart": {
+      "title": "SparePart",
+      "description": "Inventory spare part with pricing, supplier, and stock thresholds.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "category": { "type": "string" },
+        "stockQty": { "type": "integer" },
+        "purchasePrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "minStockLevel": { "type": "integer" },
+        "supplierName": { "type": "string" },
+        "supplierContact": { "type": "string" },
+        "active": { "type": "boolean" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "sku", "category", "stockQty", "purchasePrice", "sellingPrice", "minStockLevel", "active", "memberUids", "createdAt", "updatedAt"]
+    },
+    "InventoryTransaction": {
+      "title": "InventoryTransaction",
+      "description": "Immutable stock-in, stock-out, and repair consumption ledger entry.",
+      "type": "object",
+      "properties": {
+        "partId": { "type": "string" },
+        "partName": { "type": "string" },
+        "txType": { "type": "string", "enum": ["STOCK_IN", "STOCK_OUT", "REPAIR_CONSUME"] },
+        "quantityDelta": { "type": "integer" },
+        "stockBefore": { "type": "integer" },
+        "stockAfter": { "type": "integer" },
+        "unitCost": { "type": "number" },
+        "referenceTicket": { "type": "string" },
+        "note": { "type": "string" },
+        "performedByUid": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["partId", "partName", "txType", "quantityDelta", "stockBefore", "stockAfter", "unitCost", "performedByUid", "memberUids", "createdAt"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Repair billing invoice with line items, taxes, discounts, and payment balance.",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string" },
+        "repairId": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerMobile": { "type": "string" },
+        "deviceSummary": { "type": "string" },
+        "labourCharge": { "type": "number" },
+        "partsTotal": { "type": "number" },
+        "discountAmount": { "type": "number" },
+        "taxRatePercent": { "type": "number" },
+        "taxAmount": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "balanceDue": { "type": "number" },
+        "paymentStatus": { "type": "string", "enum": ["UNPAID", "PARTIAL", "PAID"] },
+        "lineItemsSummary": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["invoiceNumber", "repairId", "ticketNumber", "customerId", "customerName", "deviceSummary", "labourCharge", "partsTotal", "discountAmount", "taxRatePercent", "taxAmount", "grandTotal", "paidAmount", "balanceDue", "paymentStatus", "memberUids", "createdAt", "updatedAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Immutable customer payment transaction.",
+      "type": "object",
+      "properties": {
+        "invoiceId": { "type": "string" },
+        "repairId": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "customerName": { "type": "string" },
+        "amount": { "type": "number" },
+        "method": { "type": "string", "enum": ["CASH", "UPI", "BANK_TRANSFER", "CARD"] },
+        "isAdvance": { "type": "boolean" },
+        "referenceNumber": { "type": "string" },
+        "receivedByUid": { "type": "string" },
+        "receivedByName": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["invoiceId", "repairId", "ticketNumber", "customerName", "amount", "method", "isAdvance", "receivedByUid", "receivedByName", "memberUids", "createdAt"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Shop operating or inventory purchase expense.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "note": { "type": "string" },
+        "recordedByUid": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "category", "amount", "recordedByUid", "memberUids", "createdAt", "updatedAt"]
+    },
+    "ShopNotification": {
+      "title": "ShopNotification",
+      "description": "In-app notification event for shop team.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "eventType": { "type": "string" },
+        "repairId": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "message", "eventType", "isRead", "memberUids", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable operational and security audit log.",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "summary": { "type": "string" },
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["action", "entityType", "entityId", "summary", "actorUid", "actorName", "actorRole", "memberUids", "createdAt"]
+    },
+    "PublicTracking": {
+      "title": "PublicTracking",
+      "description": "Sanitized customer-facing repair status document without PII.",
+      "type": "object",
+      "properties": {
+        "shopId": { "type": "string" },
+        "shopName": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "deviceSummary": { "type": "string" },
+        "status": { "type": "string" },
+        "estimatedCompletionDate": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "balanceDue": { "type": "number" },
+        "timelineSummary": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["shopId", "shopName", "ticketNumber", "deviceSummary", "status", "paymentStatus", "totalAmount", "paidAmount", "balanceDue", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Authenticated user profile and active shop pointer"
+    },
+    "/shops/{shopId}": {
+      "schema": { "$ref": "#/entities/Shop" },
+      "description": "Multi-tenant repair shop workspace"
+    },
+    "/shops/{shopId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/ShopMember" },
+      "description": "Shop staff membership and RBAC role"
+    },
+    "/shopInvites/{inviteCode}": {
+      "schema": { "$ref": "#/entities/ShopInvite" },
+      "description": "Staff invite codes for joining a shop"
+    },
+    "/shops/{shopId}/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Shop customers"
+    },
+    "/shops/{shopId}/devices/{deviceId}": {
+      "schema": { "$ref": "#/entities/Device" },
+      "description": "Registered customer devices"
+    },
+    "/shops/{shopId}/repairs/{repairId}": {
+      "schema": { "$ref": "#/entities/RepairTicket" },
+      "description": "Repair job tickets"
+    },
+    "/shops/{shopId}/repairs/{repairId}/statusHistory/{historyId}": {
+      "schema": { "$ref": "#/entities/RepairStatusHistory" },
+      "description": "Immutable repair status timeline"
+    },
+    "/shops/{shopId}/repairs/{repairId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/RepairNote" },
+      "description": "Immutable diagnosis and repair notes"
+    },
+    "/shops/{shopId}/repairs/{repairId}/partsUsed/{usageId}": {
+      "schema": { "$ref": "#/entities/RepairPartUsage" },
+      "description": "Immutable parts consumed in a repair"
+    },
+    "/shops/{shopId}/technicians/{techId}": {
+      "schema": { "$ref": "#/entities/TechnicianProfile" },
+      "description": "Technician directory and performance metrics"
+    },
+    "/shops/{shopId}/parts/{partId}": {
+      "schema": { "$ref": "#/entities/SparePart" },
+      "description": "Spare parts inventory"
+    },
+    "/shops/{shopId}/inventoryTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/InventoryTransaction" },
+      "description": "Immutable inventory movement ledger"
+    },
+    "/shops/{shopId}/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/Invoice" },
+      "description": "Repair billing invoices"
+    },
+    "/shops/{shopId}/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Immutable payment ledger"
+    },
+    "/shops/{shopId}/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Shop operating expenses"
+    },
+    "/shops/{shopId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/ShopNotification" },
+      "description": "In-app shop notifications"
+    },
+    "/shops/{shopId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable audit log entries"
+    },
+    "/publicTracking/{trackingKey}": {
+      "schema": { "$ref": "#/entities/PublicTracking" },
+      "description": "Sanitized customer tracking lookup keyed by ticket_last4"
+    }
+  }
+}
